@@ -138,9 +138,9 @@ func (c *Containerd) Validate(ctx context.Context, registryConfigPath string) er
 		if err != nil {
 			return err
 		}
-		registryConfigPath := criInfo.Plugin.Exports["RegistryConfigPath"]
-		if !slices.Contains(strings.Split(registryConfigPath, ":"), registryConfigPath) {
-			return fmt.Errorf("registry config path %s does not contain configured path %s", registryConfigPath, registryConfigPath)
+		err = validateRegistryConfigPath(criInfo.Plugin.Exports["RegistryConfigPath"], registryConfigPath)
+		if err != nil {
+			return err
 		}
 		discardUnpackedLayers, err := strconv.ParseBool(criInfo.Plugin.Exports["DiscardUnpackedLayers"])
 		if err != nil {
@@ -446,4 +446,12 @@ func getContentPath(ctx context.Context, client *client.Client) (string, error) 
 		return "", nil
 	}
 	return root, nil
+}
+
+// validateRegistryConfigPath checks that the paths containerd exports, separated by ":", include the configured path.
+func validateRegistryConfigPath(exportedPaths, configuredPath string) error {
+	if !slices.Contains(strings.Split(exportedPaths, ":"), configuredPath) {
+		return fmt.Errorf("registry config path %s does not contain configured path %s", exportedPaths, configuredPath)
+	}
+	return nil
 }

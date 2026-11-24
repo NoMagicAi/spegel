@@ -49,6 +49,42 @@ func TestContainerd(t *testing.T) {
 	require.EqualT(t, dgst, digest.FromBytes(b))
 }
 
+func TestValidateRegistryConfigPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		exportedPaths string
+		expectedErr   string
+	}{
+		{
+			name:          "only the configured path",
+			exportedPaths: "/etc/docker/certs.d",
+		},
+		{
+			name:          "containerd 2.4 with Docker exports two paths",
+			exportedPaths: "/etc/containerd/certs.d:/etc/docker/certs.d",
+		},
+		{
+			name:          "configured path missing",
+			exportedPaths: "/etc/containerd/certs.d",
+			expectedErr:   "registry config path /etc/containerd/certs.d does not contain configured path /etc/docker/certs.d",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateRegistryConfigPath(tt.exportedPaths, "/etc/docker/certs.d")
+			if tt.expectedErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tt.expectedErr)
+		})
+	}
+}
+
 func TestDeduplicateImages(t *testing.T) {
 	t.Parallel()
 
