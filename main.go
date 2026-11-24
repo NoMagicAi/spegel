@@ -64,6 +64,7 @@ type RegistryCmd struct {
 	ContainerdContentPath        string           `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store."`
 	DataDir                      string           `arg:"--data-dir,env:DATA_DIR" default:"" help:"Directory where data is persisted."`
 	RouterAddr                   string           `arg:"--router-addr,env:ROUTER_ADDR" default:":5001" help:"address to serve router."`
+	RouterAdvertiseIP            string           `arg:"--router-advertise-ip,env:ROUTER_ADVERTISE_IP" help:"IP that peers dial instead of the router address IP, such as a port forward with the same port when behind NAT."`
 	RegistryAddr                 string           `arg:"--registry-addr,env:REGISTRY_ADDR" default:":5000" help:"address to server image registry."`
 	MirroredRegistries           []string         `arg:"--mirrored-registries,env:MIRRORED_REGISTRIES" help:"Registries that are configured to be mirrored, if slice is empty all registries are mirrored."`
 	RegistryFilters              []*regexp.Regexp `arg:"--registry-filters,env:REGISTRY_FILTERS" help:"Regular expressions to filter out tags/registries, if slice is empty all registries/tags are resolved."`
@@ -222,6 +223,9 @@ func registryCommand(ctx context.Context, args *RegistryCmd) error {
 	}
 	routerOpts := []libp2p.RouterOption{
 		libp2p.WithDataDir(args.DataDir),
+	}
+	if args.RouterAdvertiseIP != "" {
+		routerOpts = append(routerOpts, libp2p.WithAdvertiseIP(args.RouterAdvertiseIP))
 	}
 	router, err := libp2p.NewRouter(ctx, args.RouterAddr, bootstrapper, routing.PeerMetadata{RegistryPort: uint16(registryPort)}, routerOpts...)
 	if err != nil {

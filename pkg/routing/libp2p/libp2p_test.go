@@ -3,6 +3,8 @@ package libp2p
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 
 	"github.com/kvick-org/pkg/errgroup"
 	"github.com/kvick-org/pkg/option"
@@ -166,6 +169,67 @@ func TestP2PRouter(t *testing.T) {
 	require.ElementsMatch(t, lastIPAddrs, peer.Addresses)
 
 	// Shutdown should complete without errors.
+	cancel()
+	err = group.Wait()
+	require.NoError(t, err)
+}
+
+func TestAdvertiseIP(t *testing.T) {
+	t.Parallel()
+
+	log := tlog.NewTestLogger(t)
+	ctx := logr.NewContext(t.Context(), log)
+	ctx, cancel := context.WithCancel(ctx)
+	group := errgroup.WithContext(ctx)
+
+	_, err := NewRouter(ctx, "localhost:0", NewStaticBootstrapper(nil), routing.PeerMetadata{RegistryPort: 9090}, WithAdvertiseIP("example.com"))
+	require.Error(t, err)
+
+	// A router behind NAT announces the IP of its port forward with its own port.
+	natRouter, err := NewRouter(ctx, "127.0.0.1:0", NewStaticBootstrapper(nil), routing.PeerMetadata{RegistryPort: 9090}, WithAdvertiseIP("10.1.0.80"))
+	require.NoError(t, err)
+	group.Go(func(ctx context.Context) error {
+		return natRouter.Run(ctx)
+	})
+	listenAddrs := slices.DeleteFunc(natRouter.host.Network().ListenAddresses(), func(addr ma.Multiaddr) bool {
+		return !manet.IsIPLoopback(addr)
+	})
+	require.Len(t, listenAddrs, 1)
+	_, listenTransport := ma.SplitFirst(listenAddrs[0])
+	require.Len(t, natRouter.host.Addrs(), 1)
+	require.EqualT(t, "/ip4/10.1.0.80"+listenTransport.String(), natRouter.host.Addrs()[0].String())
+
+	// The test peer cannot dial the announced IP, so it bootstraps with the listen address.
+	bs := NewStaticBootstrapper([]peer.AddrInfo{{ID: natRouter.host.ID(), Addrs: listenAddrs}})
+	otherRouter, err := NewRouter(ctx, "localhost:0", bs, routing.PeerMetadata{RegistryPort: 9090})
+	require.NoError(t, err)
+	group.Go(func(ctx context.Context) error {
+		return otherRouter.Run(ctx)
+	})
+	<-otherRouter.connectivityGate.WaitFor(false)
+
+	key := "behind nat"
+	err = natRouter.Advertise(ctx, []string{key})
+	require.NoError(t, err)
+	require.EventuallyWith(t, func(c *assert.CollectT) {
+		stats, err := natRouter.prov.Stats(ctx)
+		require.NoError(c, err)
+		require.EqualT(c, int64(1), stats.Operations.Past.KeysProvided)
+	}, 5*time.Second, time.Second)
+
+	iter, err := otherRouter.Lookup(ctx, key, 1)
+	require.NoError(t, err)
+	select {
+	case <-iter.Ready():
+	case <-time.After(10 * time.Second):
+		t.Fatal("lookup found no provider")
+	}
+	peer, ok := iter.Acquire()
+	require.TrueT(t, ok)
+	iter.Release(peer)
+	require.EqualT(t, natRouter.host.ID().String(), peer.Host)
+	require.Contains(t, peer.Addresses, netip.MustParseAddr("10.1.0.80"))
+
 	cancel()
 	err = group.Wait()
 	require.NoError(t, err)

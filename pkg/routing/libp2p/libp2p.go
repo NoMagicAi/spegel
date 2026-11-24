@@ -52,6 +52,7 @@ const (
 )
 
 type RouterConfig struct {
+	AdvertiseIP       ma.Multiaddr
 	DataDir           string
 	Libp2pOpts        []libp2p.Option
 	AdvertiseTTL      time.Duration
@@ -71,6 +72,19 @@ func WithDataDir(dataDir string) RouterOption {
 	return func(cfg *RouterConfig) error {
 		cfg.DataDir = dataDir
 		return nil
+	}
+}
+
+// WithAdvertiseIP makes the router announce ip, with its own listen port, instead of its listen IPs.
+// It is for a router that peers reach through a port forward with the same port, such as behind NAT.
+func WithAdvertiseIP(ip string) RouterOption {
+	return func(cfg *RouterConfig) error {
+		advertiseIP, err := netip.ParseAddr(ip)
+		if err != nil {
+			return fmt.Errorf("could not parse advertise IP: %w", err)
+		}
+		cfg.AdvertiseIP, err = manet.FromIP(advertiseIP.AsSlice())
+		return err
 	}
 }
 
@@ -128,7 +142,10 @@ func NewRouter(ctx context.Context, addr string, bs Bootstrapper, peerMetadata r
 		libp2p.AddrsFactory(func(addrs []ma.Multiaddr) []ma.Multiaddr {
 			filtered := []ma.Multiaddr{}
 			for _, addr := range addrs {
-				if manet.IsIPLoopback(addr) {
+				if cfg.AdvertiseIP != nil {
+					addr = replaceIP(addr, cfg.AdvertiseIP)
+				}
+				if manet.IsIPLoopback(addr) || slices.ContainsFunc(filtered, addr.Equal) {
 					continue
 				}
 				filtered = append(filtered, addr)
@@ -517,6 +534,15 @@ func listenMultiaddrs(addr string) ([]ma.Multiaddr, error) {
 		listenAddrs = append(listenAddrs, ma.Join(ipComp.Multiaddr(), udpComp, quicComp), ma.Join(ipComp.Multiaddr(), tcpComp))
 	}
 	return listenAddrs, nil
+}
+
+// replaceIP returns addr with its IP replaced by ip, keeping the transport and port.
+func replaceIP(addr ma.Multiaddr, ip ma.Multiaddr) ma.Multiaddr {
+	first, transport := ma.SplitFirst(addr)
+	if first == nil || (first.Protocol().Code != ma.P_IP4 && first.Protocol().Code != ma.P_IP6) {
+		return addr
+	}
+	return ma.Join(ip, transport)
 }
 
 func protocolsFromAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
